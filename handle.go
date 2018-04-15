@@ -1,16 +1,17 @@
 package core
 
 import (
+	"bufio"
+	"errors"
 	"github.com/fsnotify/fsnotify"
 	"github.com/oxequa/grace"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
-	"os/exec"
-	"bufio"
-	"errors"
 )
 
 type Watch struct {
@@ -50,14 +51,14 @@ type Activity struct {
 	TasksBefore []interface{}
 }
 
-// Sequence list of commands to exec in sequence
-type Sequence struct {
-	Commands []Command `yaml:"sequence,omitempty" json:"sequence,omitempty"`
+// Series list of commands to exec in sequence
+type Series struct {
+	Tasks []interface{} `yaml:"sequence,omitempty" json:"sequence,omitempty"`
 }
 
 // Parallel list of commands to exec in parallel
 type Parallel struct {
-	Commands []Command `yaml:"parallel,omitempty" json:"parallel,omitempty"`
+	Tasks []interface{} `yaml:"parallel,omitempty" json:"parallel,omitempty"`
 }
 
 // Walk file three
@@ -66,6 +67,16 @@ func walk(path string, watcher FileWatcher) error {
 		watcher.Walk(path, true)
 		return nil
 	})
+}
+
+func intf(s interface{}) []interface{} {
+	v := reflect.ValueOf(s)
+	// There is no need to check, we want to panic if it's not slice or array
+	intf := make([]interface{}, v.Len())
+	for i := 0; i < v.Len(); i++ {
+		intf[i] = v.Index(i).Interface()
+	}
+	return intf
 }
 
 // Scan an activity and wait a change
@@ -105,12 +116,12 @@ func (a *Activity) Scan(wg *sync.WaitGroup) (e error) {
 		}
 	}()
 	// run tasks before
-	a.Reload(a.TasksBefore, reload)
+	a.Reload(reload, a.TasksBefore)
 	// wait indexing and before
 	w.Wait()
 
 	// run tasks list
-	go a.Reload(a.Tasks, reload)
+	go a.Reload(reload, a.Tasks)
 L:
 	for {
 		select {
@@ -125,7 +136,7 @@ L:
 						close(reload)
 						reload = make(chan bool)
 						Record(Prefix("Removed", Magenta), event.Name)
-						go a.Reload(a.Tasks, reload)
+						go a.Reload(reload, a.Tasks)
 					}
 				case fsnotify.Create, fsnotify.Write, fsnotify.Rename:
 					if s, fi := a.Validate(event.Name, true); s {
@@ -138,7 +149,7 @@ L:
 							close(reload)
 							reload = make(chan bool)
 							Record(Prefix("Changed", Magenta), event.Name)
-							go a.Reload(a.Tasks, reload)
+							go a.Reload(reload, a.Tasks)
 							ltime = time.Now().Truncate(time.Second)
 						}
 					}
@@ -148,7 +159,7 @@ L:
 			a.Options.Recovery.Push(Prefix("Watch Error", Red), err)
 		case <-a.Exit:
 			// run task after
-			a.Reload(a.TasksAfter, reload)
+			a.Reload(reload, a.TasksAfter)
 			break L
 		}
 	}
@@ -156,7 +167,7 @@ L:
 }
 
 // Exec a command
-func (a *Activity) Exec(c Command, w *sync.WaitGroup, reload <-chan bool) (err error) {
+func (a *Activity) Exec(c Command, w *sync.WaitGroup, reload <-chan bool) error {
 	var ex *exec.Cmd
 	var lifetime time.Time
 	defer func() {
@@ -168,10 +179,10 @@ func (a *Activity) Exec(c Command, w *sync.WaitGroup, reload <-chan bool) (err e
 		// Print command end
 		Record(Prefix("Cmd", Green),
 			Print("Finished",
-			Green.Regular("'")+
-			strings.Split(c.Cmd, " -")[0]+
-			Green.Regular("'"),
-			"in", time.Since(lifetime)))
+				Green.Regular("'")+
+					strings.Split(c.Cmd, " -")[0]+
+					Green.Regular("'"),
+				"in", time.Since(lifetime).Seconds()))
 		// Command done
 		w.Done()
 	}()
@@ -187,30 +198,30 @@ func (a *Activity) Exec(c Command, w *sync.WaitGroup, reload <-chan bool) (err e
 	} else {
 		dir, err := os.Getwd()
 		if err != nil {
-			return
+			return err
 		}
 		ex.Dir = dir
 	}
 	// stdout
 	stdout, err := ex.StdoutPipe()
 	if err != nil {
-		return
+		return err
 	}
 	// stderr
 	stderr, err := ex.StderrPipe()
-	if err != nil{
-		return
+	if err != nil {
+		return err
 	}
 	// Start command
-	if err := ex.Start(); err != nil{
-		return
-	} else{
+	if err := ex.Start(); err != nil {
+		return err
+	} else {
 		// Print command start
 		Record(Prefix("Cmd", Green),
 			Print("Running",
-			Green.Regular("'")+
-			strings.Split(c.Cmd, " -")[0]+
-			Green.Regular("'")))
+				Green.Regular("'")+
+					strings.Split(c.Cmd, " -")[0]+
+					Green.Regular("'")))
 		// Start time
 		lifetime = time.Now()
 	}
@@ -233,8 +244,8 @@ func (a *Activity) Exec(c Command, w *sync.WaitGroup, reload <-chan bool) (err e
 	// Wait command end
 	go func() { done <- ex.Wait() }()
 	// Run scanner
-	go scanner(exErr, stopErr,true)
-	go scanner(exOut, stopOut,false)
+	go scanner(exErr, stopErr, true)
+	go scanner(exOut, stopOut, false)
 
 	// Wait command result
 	select {
@@ -245,42 +256,44 @@ func (a *Activity) Exec(c Command, w *sync.WaitGroup, reload <-chan bool) (err e
 	case <-done:
 		break
 	}
-	return
+	return nil
 }
 
 // Reload exec a list of commands in parallel or in sequence
-func (a *Activity) Reload(tasks []interface{}, reload <-chan bool) {
+func (a *Activity) Reload(reload <-chan bool, tasks ...interface{}) {
 	var w sync.WaitGroup
-	w.Add(len(tasks))
 	// Loop tasks
 	for _, task := range tasks {
 		switch t := task.(type) {
+		case Command:
+			select {
+			case <-reload:
+				w.Done()
+				break
+			default:
+				// Exec command
+				if len(t.Cmd) > 0 {
+					w.Add(1)
+					a.Exec(t, &w, reload)
+				}
+			}
+			break
 		case Parallel:
-			for _, c := range t.Commands {
-				select {
-				case <-reload:
-					w.Done()
-					break
-				default:
-					// Exec command
-					if len(c.Cmd) > 0 {
-						go a.Exec(c, &w, reload)
-					}
-				}
+			var wl sync.WaitGroup
+			for _, t := range t.Tasks {
+				wl.Add(1)
+				go func(t interface{}) {
+					a.Reload(reload, t)
+					wl.Done()
+				}(t)
 			}
-		case Sequence:
-			for _, c := range t.Commands {
-				select {
-				case <-reload:
-					w.Done()
-					break
-				default:
-					// Exec command
-					if len(c.Cmd) > 0 {
-						a.Exec(c, &w, reload)
-					}
-				}
+			wl.Wait()
+			break
+		case Series:
+			for _, c := range t.Tasks {
+				a.Reload(reload, c)
 			}
+			break
 		}
 	}
 	w.Wait()

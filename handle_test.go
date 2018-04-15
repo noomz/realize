@@ -2,39 +2,37 @@ package core
 
 import (
 	"testing"
-	"bytes"
-	"log"
 )
 
 func TestActivity_Reload(t *testing.T) {
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
+	// var buf bytes.Buffer
+	// log.SetOutput(&buf)
 	activity := Activity{}
 	reload := make(chan bool)
 	tasks := make([]interface{}, 0)
 	parallel := Parallel{
-		Commands: []Command{
-			Command{
-				Cmd: "go vet",
+		Tasks: intf([]Command{
+			{
+				Cmd: "go clean",
 			},
-			Command{
-				Cmd: "go test -v",
+			{
+				Cmd: "go fmt",
 			},
-		},
+		}),
 	}
-	sequence := Sequence{
-		Commands: []Command{
-			Command{
+	sequence := Series{
+		Tasks: intf([]Command{
+			{
 				Cmd: "go install",
 			},
-			Command{
+			{
 				Cmd: "go build",
 			},
-		},
+		}),
 	}
-	tasks = append(tasks,parallel)
-	tasks = append(tasks,sequence)
-	activity.Reload(tasks, reload)
+	tasks = append(tasks, parallel)
+	tasks = append(tasks, sequence)
+	activity.Reload(reload, tasks...)
 
 }
 

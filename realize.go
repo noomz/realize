@@ -1,15 +1,15 @@
 package core
 
 import (
+	"bytes"
+	"fmt"
+	"go/build"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"fmt"
 	"time"
-	"go/build"
-	"log"
-	"bytes"
 )
 
 // Custom log
@@ -66,17 +66,17 @@ func Ext(path string) string {
 	return ""
 }
 
-func Print(msg ...interface{}) string{
+func Print(msg ...interface{}) string {
 	var buffer bytes.Buffer
 	for i := 0; i < len(msg); i++ {
-			buffer.WriteString(msg[i].(string) + " ")
+		buffer.WriteString(fmt.Sprint(msg[i]) + " ")
 	}
 	return buffer.String()
 }
 
 // Event print a new message on cli and stream on server
 func Record(prefix string, msg interface{}) {
- // switch type err string
+	// switch type err string
 	switch m := msg.(type) {
 	case string:
 		log.Println(prefix, m)
