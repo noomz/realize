@@ -39,13 +39,13 @@ func TestActivity_Reload(t *testing.T) {
 func TestActivity_Validate(t *testing.T) {
 	// Test paths
 	paths := map[string]bool{
-		"/style.go":          true,
-		"./handle.go":        true,
-		"/core/options.go":   true,
-		"../core/realize.go": true,
-		"../core/test.html":  false,
-		"notify.go":          false,
-		"realize_test.go":    false,
+		"/style.go":       true,
+		"./handle.go":     true,
+		"/options.go":     true,
+		"/realize.go":     true,
+		"../test.html":    false,
+		"notify.go":       false,
+		"realize_test.go": false,
 	}
 	activity := Activity{
 		Ignore: &Ignore{
